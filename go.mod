@@ -2,7 +2,7 @@ module github.com/robwittman/pillar-plugin-gitea
 
 go 1.25.0
 
-require github.com/robwittman/pillar v0.0.0
+require github.com/robwittman/pillar v0.0.0-20260311022040-4ea46a05e104
 
 require (
 	golang.org/x/net v0.48.0 // indirect
