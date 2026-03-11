@@ -63,8 +63,16 @@ func (p *giteaPlugin) handleAgentCreated(event *pluginv1.EventRequest) (*pluginv
 		}, nil
 	}
 
-	username := fmt.Sprintf("pillar-agent-%s", agent.ID)
-	email := fmt.Sprintf("pillar-agent-%s@localhost", agent.ID)
+	// Gitea enforces a max username length of 40 characters.
+	// Truncate the agent ID if needed to stay within the limit.
+	agentID := agent.ID
+	const maxUsernameLen = 40
+	const prefix = "pillar-agent-"
+	if len(prefix)+len(agentID) > maxUsernameLen {
+		agentID = agentID[:maxUsernameLen-len(prefix)]
+	}
+	username := fmt.Sprintf("%s%s", prefix, agentID)
+	email := fmt.Sprintf("%s%s@localhost", prefix, agentID)
 
 	// Create the Gitea user.
 	user, err := p.client.CreateUser(username, email, agent.Name)
