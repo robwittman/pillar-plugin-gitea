@@ -4,9 +4,16 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"net/url"
 	"strings"
 
 	pluginv1 "github.com/robwittman/pillar/gen/proto/pillar/plugin/v1"
+)
+
+const (
+	// Gitea enforces a max username length of 40 characters.
+	maxUsernameLen = 40
+	prefix         = "pillar-agent-"
 )
 
 type giteaPlugin struct {
@@ -16,6 +23,8 @@ type giteaPlugin struct {
 	teams []string
 	// Whether to purge user data (repos, issues, comments) on deletion.
 	purgeOnDelete bool
+	// Email domain used for generated agent email addresses.
+	emailDomain string
 }
 
 func (p *giteaPlugin) Configure(config map[string]string) error {
@@ -36,7 +45,14 @@ func (p *giteaPlugin) Configure(config map[string]string) error {
 	}
 	p.purgeOnDelete = config["purge_on_delete"] == "true"
 
-	log.Printf("gitea plugin configured: base_url=%s orgs=%v teams=%v purge_on_delete=%v", baseURL, p.orgs, p.teams, p.purgeOnDelete)
+	if v := config["email_domain"]; v != "" {
+		p.emailDomain = v
+	} else {
+		// Derive from base_url hostname (e.g. "https://git.example.com" -> "git.example.com").
+		p.emailDomain = extractHost(baseURL)
+	}
+
+	log.Printf("gitea plugin configured: base_url=%s orgs=%v teams=%v purge_on_delete=%v email_domain=%s", baseURL, p.orgs, p.teams, p.purgeOnDelete, p.emailDomain)
 	return nil
 }
 
@@ -63,16 +79,13 @@ func (p *giteaPlugin) handleAgentCreated(event *pluginv1.EventRequest) (*pluginv
 		}, nil
 	}
 
-	// Gitea enforces a max username length of 40 characters.
-	// Truncate the agent ID if needed to stay within the limit.
+	// Truncate the agent ID if needed to stay within Gitea's username limit.
 	agentID := agent.ID
-	const maxUsernameLen = 40
-	const prefix = "pillar-agent-"
 	if len(prefix)+len(agentID) > maxUsernameLen {
 		agentID = agentID[:maxUsernameLen-len(prefix)]
 	}
 	username := fmt.Sprintf("%s%s", prefix, agentID)
-	email := fmt.Sprintf("%s%s@localhost", prefix, agentID)
+	email := fmt.Sprintf("%s%s@%s", prefix, agentID, p.emailDomain)
 
 	// Create the Gitea user.
 	user, err := p.client.CreateUser(username, email, agent.Name)
@@ -144,7 +157,11 @@ func (p *giteaPlugin) handleAgentDeleted(event *pluginv1.EventRequest) (*pluginv
 		}, nil
 	}
 
-	username := fmt.Sprintf("pillar-agent-%s", agent.ID)
+	agentID := agent.ID
+	if len(prefix)+len(agentID) > maxUsernameLen {
+		agentID = agentID[:maxUsernameLen-len(prefix)]
+	}
+	username := fmt.Sprintf("%s%s", prefix, agentID)
 
 	if err := p.client.DeleteUser(username, p.purgeOnDelete); err != nil {
 		return &pluginv1.EventResponse{
@@ -155,6 +172,14 @@ func (p *giteaPlugin) handleAgentDeleted(event *pluginv1.EventRequest) (*pluginv
 	log.Printf("deleted gitea user %s for agent %s", username, agent.ID)
 
 	return &pluginv1.EventResponse{Success: true}, nil
+}
+
+func extractHost(rawURL string) string {
+	u, err := url.Parse(rawURL)
+	if err == nil && u.Hostname() != "" {
+		return u.Hostname()
+	}
+	return "noreply.localhost"
 }
 
 func splitCSV(s string) []string {
