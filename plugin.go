@@ -18,8 +18,7 @@ const (
 
 type giteaPlugin struct {
 	client *Client
-	// Optional org/team memberships to assign to every created user.
-	orgs  []string
+	// Optional team memberships (org/team format) to assign to every created user.
 	teams []string
 	// Whether to purge user data (repos, issues, comments) on deletion.
 	purgeOnDelete bool
@@ -37,9 +36,6 @@ func (p *giteaPlugin) Configure(config map[string]string) error {
 
 	p.client = NewClient(baseURL, adminToken)
 
-	if v := config["orgs"]; v != "" {
-		p.orgs = splitCSV(v)
-	}
 	if v := config["teams"]; v != "" {
 		p.teams = splitCSV(v)
 	}
@@ -52,7 +48,7 @@ func (p *giteaPlugin) Configure(config map[string]string) error {
 		p.emailDomain = extractHost(baseURL)
 	}
 
-	log.Printf("gitea plugin configured: base_url=%s orgs=%v teams=%v purge_on_delete=%v email_domain=%s", baseURL, p.orgs, p.teams, p.purgeOnDelete, p.emailDomain)
+	log.Printf("gitea plugin configured: base_url=%s teams=%v purge_on_delete=%v email_domain=%s", baseURL, p.teams, p.purgeOnDelete, p.emailDomain)
 	return nil
 }
 
@@ -97,14 +93,7 @@ func (p *giteaPlugin) handleAgentCreated(event *pluginv1.EventRequest) (*pluginv
 	}
 	log.Printf("created gitea user %s for agent %s", username, agent.ID)
 
-	// Add to configured organizations.
-	for _, org := range p.orgs {
-		if err := p.client.AddOrgMember(org, username); err != nil {
-			log.Printf("warning: add user %s to org %s: %v", username, org, err)
-		}
-	}
-
-	// Add to configured teams (by name, looked up within orgs).
+	// Add to configured teams (users join orgs through team membership).
 	for _, team := range p.teams {
 		parts := strings.SplitN(team, "/", 2)
 		if len(parts) != 2 {

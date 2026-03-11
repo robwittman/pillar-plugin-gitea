@@ -96,21 +96,6 @@ func (c *Client) DeleteUser(username string, purge bool) error {
 	return nil
 }
 
-// AddOrgMember adds a user to a Gitea organization.
-func (c *Client) AddOrgMember(org, username string) error {
-	resp, err := c.do(http.MethodPut, fmt.Sprintf("/api/v1/orgs/%s/members/%s", org, username), nil)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusOK {
-		respBody, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("add org member: status %d: %s", resp.StatusCode, respBody)
-	}
-	return nil
-}
-
 // AddTeamMember adds a user to a team within an organization.
 // The team is looked up by name within the given org.
 func (c *Client) AddTeamMember(org, teamName, username string) error {
@@ -132,7 +117,8 @@ func (c *Client) AddTeamMember(org, teamName, username string) error {
 	return nil
 }
 
-// CreateToken creates an API token for a user via the admin-like user tokens endpoint.
+// CreateToken creates an API token for a user using the Sudo header
+// to act as that user via the admin token.
 func (c *Client) CreateToken(username, tokenName string) (string, error) {
 	payload := map[string]any{
 		"name":   tokenName,
@@ -144,7 +130,7 @@ func (c *Client) CreateToken(username, tokenName string) (string, error) {
 		return "", fmt.Errorf("marshal payload: %w", err)
 	}
 
-	resp, err := c.do(http.MethodPost, fmt.Sprintf("/api/v1/users/%s/tokens", username), body)
+	resp, err := c.doAs(http.MethodPost, fmt.Sprintf("/api/v1/users/%s/tokens", username), body, username)
 	if err != nil {
 		return "", err
 	}
@@ -195,6 +181,12 @@ func (c *Client) findTeamID(org, teamName string) (int64, error) {
 
 // do executes an authenticated HTTP request against the Gitea API.
 func (c *Client) do(method, path string, body []byte) (*http.Response, error) {
+	return c.doAs(method, path, body, "")
+}
+
+// doAs executes an authenticated HTTP request, optionally impersonating
+// another user via the Sudo header (requires admin privileges).
+func (c *Client) doAs(method, path string, body []byte, sudo string) (*http.Response, error) {
 	var reader io.Reader
 	if body != nil {
 		reader = bytes.NewReader(body)
@@ -207,6 +199,9 @@ func (c *Client) do(method, path string, body []byte) (*http.Response, error) {
 	req.Header.Set("Authorization", "token "+c.adminToken)
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
+	}
+	if sudo != "" {
+		req.Header.Set("Sudo", sudo)
 	}
 
 	resp, err := c.httpClient.Do(req)
