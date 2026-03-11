@@ -43,37 +43,39 @@ type User struct {
 }
 
 // CreateUser creates a new Gitea user via the admin API.
-func (c *Client) CreateUser(username, email, fullName string) (*User, error) {
+// Returns the user and the generated password (needed for basic auth to create tokens).
+func (c *Client) CreateUser(username, email, fullName string) (*User, string, error) {
+	password := generatePassword()
 	payload := map[string]any{
 		"username":             username,
 		"email":                email,
 		"full_name":            fullName,
-		"password":             generatePassword(),
+		"password":             password,
 		"must_change_password": false,
 		"visibility":           "private",
 	}
 
 	body, err := json.Marshal(payload)
 	if err != nil {
-		return nil, fmt.Errorf("marshal payload: %w", err)
+		return nil, "", fmt.Errorf("marshal payload: %w", err)
 	}
 
 	resp, err := c.do(http.MethodPost, "/api/v1/admin/users", body)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusCreated {
 		respBody, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("create user: status %d: %s", resp.StatusCode, respBody)
+		return nil, "", fmt.Errorf("create user: status %d: %s", resp.StatusCode, respBody)
 	}
 
 	var user User
 	if err := json.NewDecoder(resp.Body).Decode(&user); err != nil {
-		return nil, fmt.Errorf("decode user: %w", err)
+		return nil, "", fmt.Errorf("decode user: %w", err)
 	}
-	return &user, nil
+	return &user, password, nil
 }
 
 // DeleteUser removes a Gitea user via the admin API.
@@ -117,9 +119,9 @@ func (c *Client) AddTeamMember(org, teamName, username string) error {
 	return nil
 }
 
-// CreateToken creates an API token for a user using the Sudo header
-// to act as that user via the admin token.
-func (c *Client) CreateToken(username, tokenName string) (string, error) {
+// CreateToken creates an API token for a user using basic auth,
+// since the token endpoint requires authentication as the target user.
+func (c *Client) CreateToken(username, password, tokenName string) (string, error) {
 	payload := map[string]any{
 		"name":   tokenName,
 		"scopes": []string{"all"},
@@ -130,9 +132,17 @@ func (c *Client) CreateToken(username, tokenName string) (string, error) {
 		return "", fmt.Errorf("marshal payload: %w", err)
 	}
 
-	resp, err := c.doAs(http.MethodPost, fmt.Sprintf("/api/v1/users/%s/tokens", username), body, username)
+	url := fmt.Sprintf("%s/api/v1/users/%s/tokens", c.baseURL, username)
+	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("build request: %w", err)
+	}
+	req.SetBasicAuth(username, password)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("POST %s: %w", url, err)
 	}
 	defer resp.Body.Close()
 
@@ -181,12 +191,6 @@ func (c *Client) findTeamID(org, teamName string) (int64, error) {
 
 // do executes an authenticated HTTP request against the Gitea API.
 func (c *Client) do(method, path string, body []byte) (*http.Response, error) {
-	return c.doAs(method, path, body, "")
-}
-
-// doAs executes an authenticated HTTP request, optionally impersonating
-// another user via the Sudo header (requires admin privileges).
-func (c *Client) doAs(method, path string, body []byte, sudo string) (*http.Response, error) {
 	var reader io.Reader
 	if body != nil {
 		reader = bytes.NewReader(body)
@@ -199,9 +203,6 @@ func (c *Client) doAs(method, path string, body []byte, sudo string) (*http.Resp
 	req.Header.Set("Authorization", "token "+c.adminToken)
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
-	}
-	if sudo != "" {
-		req.Header.Set("Sudo", sudo)
 	}
 
 	resp, err := c.httpClient.Do(req)

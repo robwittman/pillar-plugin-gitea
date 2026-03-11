@@ -84,7 +84,7 @@ func (p *giteaPlugin) handleAgentCreated(event *pluginv1.EventRequest) (*pluginv
 	email := fmt.Sprintf("%s%s@%s", prefix, agentID, p.emailDomain)
 
 	// Create the Gitea user.
-	user, err := p.client.CreateUser(username, email, agent.Name)
+	user, password, err := p.client.CreateUser(username, email, agent.Name)
 	if err != nil {
 		return &pluginv1.EventResponse{
 			Success: false,
@@ -106,7 +106,7 @@ func (p *giteaPlugin) handleAgentCreated(event *pluginv1.EventRequest) (*pluginv
 	}
 
 	// Generate an API token for the agent.
-	token, err := p.client.CreateToken(username, "pillar")
+	token, err := p.client.CreateToken(username, password, "pillar")
 	if err != nil {
 		return &pluginv1.EventResponse{
 			Success: false,
